@@ -951,8 +951,19 @@ function sdel(key, shared){
       try { localStorage.removeItem(key); return true; } catch(e){ return null; }
     });
   }
-  return fetch(sbUrl("key=eq." + encodeURIComponent(key)), { method: "DELETE", headers: sbHeaders() })
-    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return true; })
+  return fetch(sbUrl("key=eq." + encodeURIComponent(key)), {
+    method: "DELETE",
+    headers: sbHeaders({ "Prefer": "return=representation" })
+  })
+    .then(function(r){
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      return r.json();
+    })
+    .then(function(rows){
+      // RLS blocks silently: 200 OK but zero rows deleted
+      if(!rows || !rows.length){ console.error("sdel: no rows deleted (missing DELETE policy or key not found):", key); return null; }
+      return true;
+    })
     .catch(function(err){ console.error("sdel failed:", err); return null; });
 }
 function slist(prefix, shared){
@@ -1086,6 +1097,13 @@ function loadAll(){
 
 function seedIfEmpty(){
   if(CARS.length || NEWS.length) return Promise.resolve();
+  // seed demo content only once, so deleting everything doesn't bring it back
+  return sget("seeded", true).then(function(flag){
+    if(flag) return;
+    return doSeed();
+  });
+}
+function doSeed(){
   var now = Date.now();
   var demoCars = [
     {
@@ -1116,6 +1134,7 @@ function seedIfEmpty(){
   var writes = [];
   demoCars.forEach(function(c){ writes.push(sset("car:"+c.id, JSON.stringify(c), true)); });
   demoNews.forEach(function(n){ writes.push(sset("news:"+n.id, JSON.stringify(n), true)); });
+  writes.push(sset("seeded", "1", true));
   CARS = demoCars; NEWS = demoNews;
   return Promise.all(writes);
 }
@@ -1518,7 +1537,10 @@ function setupCarForm(){
 
 function deleteCar(carId){
   if(!confirm("Delete this listing? This cannot be undone.")) return;
-  sdel("car:"+carId, true).then(function(){ showToast("Listing deleted"); loadAll(); });
+  sdel("car:"+carId, true).then(function(ok){
+    if(!ok){ showToast("Delete failed — add a DELETE policy on the kv table in Supabase."); return; }
+    showToast("Listing deleted"); loadAll();
+  });
 }
 
 /* ============================================================
@@ -1602,7 +1624,10 @@ function setupNewsForm(){
 
 function deleteNews(newsId){
   if(!confirm("Delete this news post?")) return;
-  sdel("news:"+newsId, true).then(function(){ showToast("News deleted"); loadAll(); });
+  sdel("news:"+newsId, true).then(function(ok){
+    if(!ok){ showToast("Delete failed — add a DELETE policy on the kv table in Supabase."); return; }
+    showToast("News deleted"); loadAll();
+  });
 }
 
 /* ============================================================
